@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+
+# V.2.0 - 4/1/2020
+
+import os
+
+CWD = os.getcwd()
+FileList = os.listdir(os.getcwd())
+
+
+def StrFix(iStr,le):
+	if len(iStr)<le:
+		return ' '*(le-len(iStr))+iStr
+	else:	return iStr
+
+print('\n'+' '*4+'General check at the end of a VASP run\n')
+
+# Log info
+print(' '*4+'[1] Looking for logfiles')
+for iFile in FileList:
+	if 'logfile' in iFile or 'Logfile' in iFile:
+		LogFile = iFile
+		print(' '*8+'> Logfile found   : '+LogFile, end =' '+'.'*8+' ')
+
+		# Check log file
+		with open(LogFile) as f:
+			LogLines = f.readlines()
+			f.close()
+
+		scpCounter=0
+		geomCounter=0
+		for iLine in LogLines:
+			if len(iLine.split())>1:
+				if iLine.split()[0] in ['DAV:','RMM:']: scpCounter+=1
+				if 'E0=' in iLine.split(): geomCounter += 1
+		print('scp count : '+str(scpCounter), end=' / ')
+		print('geom count : ' + str(geomCounter))
+
+
+	# else: print(' '*4+'>>>> Did not found a logfile of the run')
+
+
+
+# submit INFO
+print(' '*4+'[2] Submit job info')
+FoundSubmit = False
+for iFile in FileList:
+	if 'submit' in iFile:
+		FoundSubmit=True
+		print(' ' * 8 + '> Submit file found: ' + iFile, end=' '+'.'*8+' ')
+
+		with open(iFile,'r') as f:
+			SubmitLines = f.readlines()
+			f.close()
+
+		for iLine in SubmitLines:
+			if '#SBATCH -p' in iLine: print('partition:' + str(iLine.split()[2]), end='\n'+' '*53)
+			if '#SBATCH -n' in iLine: print('cpu:'+str(iLine.split()[2]), end=' ')
+			if '#SBATCH --mem-per-cpu' in iLine: print('mem/cpu:' + str(iLine.split('=')[1].split()[0]), end=' ')
+			if '#SBATCH --ntasks-per-node' in iLine: print('task/node:' + str(iLine.split('=')[1].split()[0]), end=' ')
+		print()
+
+if not FoundSubmit:
+	print(' '*8+'> Submit file not found, look like a local run')
+
+
+# VASP parallelization info
+print(' '*4+'[3] VASP internal parallelization')
+with open('INCAR','r') as f:
+	INCAR = f.readlines()
+	f.close()
+ParallelFound = False
+print(' '*8+'> Parallelization : ', end='')
+for iLine in INCAR:
+	if len(iLine) > 3:
+		if iLine[:4]=='NPAR':
+			ParallelFound=True
+			print('NPAR='+iLine.split('=')[1].split()[0],end=' ')
+		elif iLine[:4]=='KPAR':
+			ParallelFound=True
+			print('KPAR='+iLine.split('=')[1].split()[0])
+if not ParallelFound: print(' Not found, probably a serial run')
+
+
+
+# OUTCAR info
+print(' '*4+'[4] Looking for OUTCAR files')
+
+print(' '*8+'> Opening OUTCAR ...', end=' ')
+with open('OUTCAR', 'r') as f:
+	OUTCARlines = f.readlines()
+	f.close()
+print('Ok', end=' : ')
+
+if 'Voluntary context switches:' in OUTCARlines[-1]:print('properly finished run')
+else: quit('\n'*2+' '*7+'¡'*5+'Interrupted run'+'!'*5+'\n'+' ' * 4 + 'Done!')
+
+
+
+# Check IBRION
+for iLine in OUTCARlines:
+	if len(iLine.split()) > 3:
+		if 'IBRION' in iLine.split():
+			IBRION=int(iLine.split()[2])
+			print(' '*8+'> Recognize run type '+str(IBRION),end='')
+			if IBRION in [1,2]: print('  : geometry relaxation')
+			elif IBRION == -1: print(' : static')
+			elif IBRION in [5,6,7,8]:print('  : frequency')
+			else: print('')
+
+# Dispersion correction
+if IBRION in [-1,1,2]:
+	GotD3 = False
+	for iLine in range(len(OUTCARlines)):
+		ThisLine = OUTCARlines[len(OUTCARlines) - iLine - 1]
+
+		if GotD3 == False:
+			if 'IVDW' in ThisLine:
+				GotD3 = True
+				# Dispersion type
+				print(' '*8+'> Dispersion correction : found IVDW='+ThisLine.split()[2],end=', ')
+				for i in OUTCARlines[len(OUTCARlines) - iLine - 2].split(): print(i, end=' ')
+				print()
+				# Dispersion energy
+				while ' Edisp' not in OUTCARlines[len(OUTCARlines) - iLine - 2]: iLine+=1
+				print(' ' * 34 + 'correction @ last geometry = ' + OUTCARlines[len(OUTCARlines) - iLine - 2].split()[2] + ' eV')
+				break
+	if GotD3 == False:
+		print(' '*8+'> Dispersion correction : Not found')
+
+
+
+
+
+
+# Recorre hacia arriba
+if IBRION in [1,2]:
+	print(' '*8+'> Checking ending       : ', end='')
+	Convergido = False; GotE = False
+	for iLine in range(len(OUTCARlines)):
+		ThisLine = OUTCARlines[len(OUTCARlines) - iLine - 1]
+
+		if Convergido == False:
+			if ThisLine == " reached required accuracy - stopping structural energy minimisation\n":
+				Convergido = True
+				print('reached geometric convergence, yay !!!!')
+			continue
+		else:
+			if len(ThisLine.split())>4:
+				if ThisLine.split()[4] == "energy(sigma->0)" :
+					print (' '*34+'Energy (sigma->0) = '+ThisLine.split()[6]+' eV')
+					GotE = True
+				else:
+					continue
+			else:
+				continue
+		if GotE==True:
+			print(' '*4+'Done!')
+			quit()
+	if not GotE:
+		print(' '*7+'> Couldn\'t find geometric convergence')
+		print(' ' * 4 + 'Done!')
+
+elif IBRION in [5,6,7,8]:
+	print(' '*8+'> Frequencies found     : ', end='')
+	#TODO: Add list
+	tmpFreqListR = []
+	tmpFreqListI = []
+	for iLine in OUTCARlines:
+		if 'THz' in iLine.split():
+			# Real freqs
+			if iLine.split()[1] == 'f':
+				tmpFreqListR.append(float(iLine.split()[7]))
+				for i in [0,1,2]: print(str(iLine.split()[i]),end=' ')
+				print(StrFix(iLine.split()[7],12),end=' ')
+				print(StrFix(iLine.split()[8], 4),end=' ')
+				print(StrFix(iLine.split()[9],12), end=' ')
+				print(StrFix(iLine.split()[10],4))
+				print(' '*34,end='')
+			else:
+				tmpFreqListI.append(float(iLine.split()[6]))
+				for i in [0,1]: print(str(iLine.split()[i]),end=' ')
+				print(StrFix(iLine.split()[7],13),end=' ')
+				print(StrFix(iLine.split()[8], 4),end=' ')
+				print(StrFix(iLine.split()[9],12), end=' ')
+				print(StrFix(iLine.split()[10],4))
+				print(' '*34,end='')
+	# List
+	print('\n'+' '*10+'Real Freqs (cm-1): '+str(tmpFreqListR))
+	print(' ' * 10 + 'Img  Freqs       : ' + str(tmpFreqListI))
+
+
+
+	print('\n'+' ' * 4 + 'Done!')
+
+
+
+
+else: print(' ' * 4 + 'Done!')
+
