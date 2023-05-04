@@ -3,7 +3,7 @@
 # This script reads POSCAR/CONTCAR type files and computes center of mass and inertia moments.
 # It allows selecting a subset of atoms
 
-# v2.0 - 4/may/2023 - SAGG (sebagodoy.at.udec.cl)
+# v0.2 - 16/ago/2022 - SAGG
 
 # packages
 import numpy as np
@@ -30,13 +30,10 @@ AtomMases = {
 }
 
 # Custom functions
-def Report(istr, end='\n', start=' '*4+'> '):
-    print(start+str(istr), end=end)
+def Report(istr):
+    print(' '*4+'> '+str(istr))
 def FixNum(iNum, **kwargs):
     myformat = "{:"+str(kwargs.get('tot',12))+"."+str(kwargs.get('dec',4))+"f}"
-    return myformat.format(iNum)
-def FixNumE(iNum, **kwargs):
-    myformat = "{:"+str(kwargs.get('tot',12))+"."+str(kwargs.get('dec',4))+"e}"
     return myformat.format(iNum)
 
 
@@ -62,7 +59,7 @@ except ValueError:
     quit("File must contain line with atom names in line 6 and amount per type in line 7.")
 
 # Check format
-if not len(content[8].split()) == 1:
+if len(content[8].split()) == 6:
     quit('Check the file format, atom coordinates are expected start in line 10, (line 8: Selective dynamics '
          '\r\nand line 9:Direct or Cartesian or C, c, K, c')
 
@@ -73,6 +70,13 @@ for i, k in zip(atomtype_names, atomtype_numbers):
     for iatom in range(k):
         AtomData.append([float(coor) for coor in content[9 + atomcounter].split()[:3]]+[i] + [AtomMases[i]])
         atomcounter += 1
+
+# Correct direct coordinates
+if content[8][:-1].rstrip() in 'Direct':
+    # scalate coordinates to the box
+    Report('Scaling direct coordinates to cartesian for all atoms')
+    for iatom in AtomData:
+        iatom[:3] = [ sum([cellbox[i][j]*iatom[i] for i in range(3)]) for j in range(3)]
 
 # Select subset
 subset = input('  > Select subset of atoms (e.g. 3,5,6-9,13) or use all (def.) :')
@@ -90,7 +94,7 @@ else:
     Report('Chosen a subset of the available atoms.')
 
 # Ask about mases
-# TODO: add modify masses option
+# TODO: add modify mases
 ThisMases = {}
 for i in Atoms:
     ThisMases[i[3]]=i[4]
@@ -101,37 +105,16 @@ Report('Selection includes : '+', '.join(list(ThisMases.keys())))
 # Compute mass center
 TotalMass = sum([i[4] for i in Atoms])
 MassCenter = [sum([i[j]*i[4]/TotalMass for i in Atoms]) for j in range(3)]
-
-if content[8][:-1].rstrip() in 'Direct':
-    MassCenterDirect = MassCenter
-    # transform to cartesian coordinates
-    MassCenterCart = [sum([cellbox[i][j] * MassCenter[i] for i in range(3)]) for j in range(3)]
-
-else:
-    MassCenterCart = MassCenter
-    # -- Transform cartesian to cell coordinate system
-    New2OldBasis = np.array([[i, j, k] for i, j, k in zip(cellbox[0], cellbox[1], cellbox[2])])
-    New2OldBasis = np.linalg.inv(New2OldBasis)
-    MassCenterDirect = [sum([New2OldBasis[j][i] * MassCenterCart[i] for i in range(len(MassCenterCart))]) for j in range(len(MassCenterCart))]
-
 Report('Total mass of the selected subset is : '+FixNum(TotalMass))
-Report('Mass center is : [' +
-       ' , '.join([FixNum(i, tot=8) for i in MassCenterCart]) +
-       '] ( Cartesian )', start = ' '*6)
-Report('                 [' +
-       ' , '.join([FixNum(i, tot=8) for i in MassCenterDirect]) +
-       '] ( Direct )', start = ' '*6)
-# ----------------------------------------------------------------------------------------------------------------------
-# Correct direct coordinates to cartessian
-if content[8][:-1].rstrip() in 'Direct':
-    Report('Scaling direct coordinates to cartesian for the atoms considered')
-    # scalate coordinates to the box
-    for iatom in Atoms:
-        iatom[:3] = [ sum([cellbox[i][j]*iatom[i] for i in range(3)]) for j in range(3)]
+Report('Mass center is : ['+' , '.join([FixNum(i, tot=8) for i in MassCenter])+']')
+
+if [[cellbox[i][j] for j in range(3) if j!=i] for i in range(3)] == [[0.,0.],[0.,0.],[0.,0.]]:
+    # squared cell      
+    Report('        direct : ['+' , '.join([FixNum(MassCenter[i]/cellbox[i][i], tot=8) for i in range(3)])+']')
 
 # Correct coordinates to mass center
 for iatom in Atoms:
-    iatom[0:3] = [iatom[j]-MassCenterCart[j] for j in range(3)]
+    iatom[0:3] = [iatom[j]-MassCenter[j] for j in range(3)]
 
 # Inertia tensor
 Itens = [[0., 0., 0.], [0., 0., 0.], [0., 0., 0.]]
@@ -156,17 +139,5 @@ Report('Inertia moments and principal rotation axis : ')
 for i, j in zip(w,v):
     print(' '*16, end='')
     print('['+' , '.join([FixNum(k, tot=8) for k in j])+']', end=' -> ')
-    print(FixNum(i, tot=8) + ' (g/mol)*A2')
+    print(FixNum(i, tot=8) + '(g/mol)*A2')
 
-# Rotational temperatures
-#### Constants
-kb			= 1.3806488E-23		# Boltzmann's constant [m2 kg / s2 K]
-hh			= 6.62606957E-34	# Plack's constant [m2 kG/s]
-Nav			= 6.02214129E23		# Avogadro's Number [particles/mol]
-
-Report('Inertia moments (I) and rotational temperatures')
-print('                I : (g/mol)*A2    kg*m2       ;    rot. temp  [K] ')
-for i in w:
-    iunits = i/(1000*Nav*1e20)
-    rotT = (hh**2)/(8*(np.pi**2)*iunits*kb)
-    print(' '*20 + FixNum(i, tot=8) + ' '*4 + FixNumE(iunits, tot=8) + ' '*10+ FixNum(rotT, tot=8))

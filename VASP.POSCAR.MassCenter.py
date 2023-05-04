@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# This script reads POSCAR/CONTCAR type files and computes center of mass and inertia moments.
+# This script reads POSCAR/CONTCAR type files and computes center of mass.
 # It allows selecting a subset of atoms
 
 # v2.0 - 4/may/2023 - SAGG (sebagodoy.at.udec.cl)
@@ -35,13 +35,10 @@ def Report(istr, end='\n', start=' '*4+'> '):
 def FixNum(iNum, **kwargs):
     myformat = "{:"+str(kwargs.get('tot',12))+"."+str(kwargs.get('dec',4))+"f}"
     return myformat.format(iNum)
-def FixNumE(iNum, **kwargs):
-    myformat = "{:"+str(kwargs.get('tot',12))+"."+str(kwargs.get('dec',4))+"e}"
-    return myformat.format(iNum)
 
 
 # Open file
-filedir = input('  > File (def=./CONTCAR) : ') or './CONTCAR'
+filedir = input('  > File (def=./POSCAR) : ') or './POSCAR'
 with open(filedir, 'r') as f:
     content = f.readlines()
 
@@ -121,52 +118,3 @@ Report('Mass center is : [' +
 Report('                 [' +
        ' , '.join([FixNum(i, tot=8) for i in MassCenterDirect]) +
        '] ( Direct )', start = ' '*6)
-# ----------------------------------------------------------------------------------------------------------------------
-# Correct direct coordinates to cartessian
-if content[8][:-1].rstrip() in 'Direct':
-    Report('Scaling direct coordinates to cartesian for the atoms considered')
-    # scalate coordinates to the box
-    for iatom in Atoms:
-        iatom[:3] = [ sum([cellbox[i][j]*iatom[i] for i in range(3)]) for j in range(3)]
-
-# Correct coordinates to mass center
-for iatom in Atoms:
-    iatom[0:3] = [iatom[j]-MassCenterCart[j] for j in range(3)]
-
-# Inertia tensor
-Itens = [[0., 0., 0.], [0., 0., 0.], [0., 0., 0.]]
-for iatom in Atoms:
-    mag2 = sum([i**2 for i in iatom[:3]])
-    for i in range(3):
-        for j in range(3):
-            Itens[i][j] -= iatom[i]*iatom[j]*iatom[4]
-        Itens[i][i] += mag2*iatom[4]
-
-Report('Inertia tensor : ')
-for i in Itens:
-    print(' '*16, end='')
-    for j in i:
-        print(FixNum(j), end=' , ')
-    print()
-
-# Ineria moments around principal axis
-ITensArray = np.array(Itens)
-w, v = np.linalg.eig(ITensArray)
-Report('Inertia moments and principal rotation axis : ')
-for i, j in zip(w,v):
-    print(' '*16, end='')
-    print('['+' , '.join([FixNum(k, tot=8) for k in j])+']', end=' -> ')
-    print(FixNum(i, tot=8) + ' (g/mol)*A2')
-
-# Rotational temperatures
-#### Constants
-kb			= 1.3806488E-23		# Boltzmann's constant [m2 kg / s2 K]
-hh			= 6.62606957E-34	# Plack's constant [m2 kG/s]
-Nav			= 6.02214129E23		# Avogadro's Number [particles/mol]
-
-Report('Inertia moments (I) and rotational temperatures')
-print('                I : (g/mol)*A2    kg*m2       ;    rot. temp  [K] ')
-for i in w:
-    iunits = i/(1000*Nav*1e20)
-    rotT = (hh**2)/(8*(np.pi**2)*iunits*kb)
-    print(' '*20 + FixNum(i, tot=8) + ' '*4 + FixNumE(iunits, tot=8) + ' '*10+ FixNum(rotT, tot=8))
